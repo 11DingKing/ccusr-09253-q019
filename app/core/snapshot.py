@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .explain import ExplanationGraph
 from .replay import (
-    CheckinRecord,
     Event,
-    ReplayState,
     StudentProgress,
     explain_checkin,
-    replay,
+    replay_explained,
 )
 
 
@@ -25,9 +24,10 @@ class Snapshot:
     generated_at: str
     event_cutoff_id: str | None
     students: list[dict[str, Any]]
+    explanation_graph: ExplanationGraph | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "plan_version": self.plan_version,
             "freeze_id": self.freeze_id,
             "timezone": self.timezone,
@@ -36,9 +36,13 @@ class Snapshot:
             "event_cutoff_id": self.event_cutoff_id,
             "students": self.students,
         }
+        if self.explanation_graph is not None:
+            data["explanation_graph"] = self.explanation_graph.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Snapshot":
+        graph_data = data.get("explanation_graph")
         return cls(
             plan_version=data["plan_version"],
             freeze_id=data.get("freeze_id"),
@@ -47,6 +51,11 @@ class Snapshot:
             generated_at=data["generated_at"],
             event_cutoff_id=data.get("event_cutoff_id"),
             students=list(data.get("students", [])),
+            explanation_graph=(
+                ExplanationGraph.from_dict(graph_data)
+                if graph_data is not None
+                else None
+            ),
         )
 
 
@@ -87,7 +96,7 @@ def build_snapshot(
     generated_at: datetime | None = None,
 ) -> Snapshot:
     """执行确定性的业务处理。"""
-    state: ReplayState = replay(
+    state, graph = replay_explained(
         events,
         plan_version=plan_version,
         timezone_name=timezone_name,
@@ -111,6 +120,7 @@ def build_snapshot(
         generated_at=generated_at.isoformat().replace("+00:00", "Z"),
         event_cutoff_id=event_cutoff_id,
         students=students,
+        explanation_graph=graph,
     )
 
 

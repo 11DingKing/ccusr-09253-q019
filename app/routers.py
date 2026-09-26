@@ -12,6 +12,10 @@ from .db import get_db
 from .schemas import (
     DiffOut,
     EventBatchIn,
+    ExplanationExportOut,
+    ExplanationGraphOut,
+    ExplanationTraceOut,
+    ExplanationVerifyOut,
     FreezeIn,
     ImportResult,
     PlanIn,
@@ -160,3 +164,102 @@ def get_diff(
         )
     except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/plans/{plan_version}/explanation/students/{student_id}",
+    response_model=ExplanationGraphOut,
+)
+def get_explanation_graph(
+    plan_version: str,
+    student_id: str,
+    viewer_role: str = "staff",
+    freeze_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.explanation_graph_for_student(
+            db,
+            plan_version,
+            student_id,
+            viewer_role=viewer_role,
+            freeze_id=freeze_id,
+        )
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result
+
+
+@router.get(
+    "/plans/{plan_version}/explanation/nodes/{node_id}",
+    response_model=ExplanationTraceOut,
+)
+def get_explanation_node(
+    plan_version: str,
+    node_id: str,
+    viewer_role: str = "staff",
+    freeze_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.trace_explanation_node(
+            db,
+            plan_version,
+            node_id,
+            viewer_role=viewer_role,
+            freeze_id=freeze_id,
+        )
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="node not found")
+    return result
+
+
+@router.get(
+    "/plans/{plan_version}/freezes/{freeze_id}/explanation/verify",
+    response_model=ExplanationVerifyOut,
+)
+def get_explanation_verify(
+    plan_version: str,
+    freeze_id: str,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        return services.verify_explanation_graph(db, plan_version, freeze_id)
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/plans/{plan_version}/explanation/students/{student_id}/export",
+    response_model=ExplanationExportOut,
+)
+def get_explanation_export(
+    plan_version: str,
+    student_id: str,
+    viewer_role: str = "auditor",
+    freeze_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.export_explanation_graph(
+            db,
+            plan_version,
+            student_id,
+            viewer_role=viewer_role,
+            freeze_id=freeze_id,
+        )
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result

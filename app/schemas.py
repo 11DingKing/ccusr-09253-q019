@@ -138,3 +138,47 @@ class DiffOut(BaseModel):
     new_event_cutoff_id: str | None
     student_changes: list[dict[str, Any]]
     students_affected: int
+
+
+class ExplanationNodeOut(BaseModel):
+    node_id: str
+    kind: str
+    student_id: str
+    source_version: str
+    input_fingerprint: str
+    inputs: list[str]
+    attributes: dict[str, Any]
+
+
+class ExplanationGraphOut(BaseModel):
+    plan_version: str
+    freeze_id: str | None
+    student_id: str
+    viewer_role: str
+    graph_digest: str
+    root_node_id: str
+    nodes: list[ExplanationNodeOut]
+
+
+class ExplanationTraceOut(BaseModel):
+    plan_version: str
+    freeze_id: str | None
+    node_id: str
+    viewer_role: str
+    node: ExplanationNodeOut
+    ancestors: list[ExplanationNodeOut]
+
+
+class ExplanationVerifyOut(BaseModel):
+    plan_version: str
+    freeze_id: str
+    event_cutoff_id: str | None
+    stored_digest: str | None
+    rebuilt_digest: str
+    consistent: bool
+    problems: list[str]
+
+
+class ExplanationExportOut(BaseModel):
+    manifest: dict[str, Any]
+    graph: ExplanationGraphOut

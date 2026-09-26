@@ -15,6 +15,7 @@ from .clock import (
     to_utc,
     union_seconds,
 )
+from .explain import RULE_VERSION, ExplanationBuilder, ExplanationGraph
 
 
 class EventType(StrEnum):
@@ -120,15 +121,21 @@ def _parse_checkin(
     )
 
 
-def replay(
+def _utc_stamp(value: datetime) -> str:
+    return to_utc(value).isoformat().replace("+00:00", "Z")
+
+
+def _replay_events(
     events: Iterable[Event],
     *,
     plan_version: str,
     timezone_name: str,
     required_seconds: int,
     up_to_event_id: str | None = None,
-) -> ReplayState:
-    """执行确定性的业务处理。"""
+    rule_version: str = RULE_VERSION,
+    build_graph: bool = True,
+) -> tuple[ReplayState, ExplanationGraph | None]:
+    """执行确定性的业务处理，解释图与最终状态由同一遍重放产出。"""
     sorted_events = sorted(
         (e for e in events if e.plan_version == plan_version),
         key=lambda e: e.event_id,
@@ -139,17 +146,49 @@ def replay(
     checkins_by_student: dict[str, list[CheckinRecord]] = {}
     checkin_index: dict[str, CheckinRecord] = {}
     adjustments_by_student: dict[str, list[Adjustment]] = {}
+    builder = (
+        ExplanationBuilder(
+            plan_version=plan_version,
+            timezone_name=timezone_name,
+            required_seconds=required_seconds,
+            rule_version=rule_version,
+            event_cutoff_id=up_to_event_id,
+        )
+        if build_graph
+        else None
+    )
 
     for event in sorted_events:
         if event.event_type == EventType.CHECKIN:
             record = _parse_checkin(event, timezone_name)
             checkins_by_student.setdefault(event.student_id, []).append(record)
             checkin_index[event.event_id] = record
+            if builder is not None:
+                builder.add_checkin(
+                    event_id=event.event_id,
+                    student_id=event.student_id,
+                    event_type=event.event_type.value,
+                    payload=event.payload,
+                    activity_id=record.activity_id,
+                    activity_type=record.activity_type,
+                    start_utc=_utc_stamp(record.start_utc),
+                    end_utc=_utc_stamp(record.end_utc),
+                    raw_seconds=record.seconds,
+                    initial_status=record.status.value,
+                )
         elif event.event_type == EventType.MENTOR_CONFIRM:
             target_id = event.payload.get("checkin_event_id")
             target = checkin_index.get(target_id)
             if target is not None and target.student_id == event.student_id:
                 target.status = CheckinStatus.CONFIRMED
+                if builder is not None:
+                    builder.add_confirmation(
+                        event_id=event.event_id,
+                        student_id=event.student_id,
+                        event_type=event.event_type.value,
+                        payload=event.payload,
+                        checkin_event_id=target_id,
+                    )
         elif event.event_type == EventType.LEAVE_CORRECTION:
             seconds = int(event.payload.get("adjustment_seconds", 0))
             adjustments_by_student.setdefault(event.student_id, []).append(
@@ -160,6 +199,15 @@ def replay(
                     reason=str(event.payload.get("reason", "")),
                 )
             )
+            if builder is not None:
+                builder.add_adjustment(
+                    event_id=event.event_id,
+                    student_id=event.student_id,
+                    event_type=event.event_type.value,
+                    payload=event.payload,
+                    seconds=seconds,
+                    reason=str(event.payload.get("reason", "")),
+                )
 
     all_students = set(checkins_by_student) | set(adjustments_by_student)
     students: dict[str, StudentProgress] = {}
@@ -167,24 +215,23 @@ def replay(
         records = checkins_by_student.get(student_id, [])
         adjustments = adjustments_by_student.get(student_id, [])
 
-        confirmed_intervals = [
-            (r.start_utc, r.end_utc) for r in records if r.counts
-        ]
-        pending_intervals = [
-            (r.start_utc, r.end_utc)
-            for r in records
-            if r.status == CheckinStatus.PENDING
-        ]
+        confirmed_records = [r for r in records if r.counts]
+        pending_records = [r for r in records if r.status == CheckinStatus.PENDING]
+        confirmed_intervals = [(r.start_utc, r.end_utc) for r in confirmed_records]
+        pending_intervals = [(r.start_utc, r.end_utc) for r in pending_records]
 
-        confirmed_seconds = union_seconds(confirmed_intervals)
+        merged_confirmed = merge_intervals(confirmed_intervals)
+        confirmed_seconds = sum(
+            elapsed_seconds(start, end) for start, end in merged_confirmed
+        )
         pending_seconds = union_seconds(pending_intervals)
         adjustment_seconds = sum(a.seconds for a in adjustments)
-        total_seconds = confirmed_seconds + adjustment_seconds
-        if total_seconds < 0:
-            total_seconds = 0
+        raw_total_seconds = confirmed_seconds + adjustment_seconds
+        clamped = raw_total_seconds < 0
+        total_seconds = max(raw_total_seconds, 0)
 
         day_totals: dict[str, int] = {}
-        for start, end in merge_intervals(confirmed_intervals):
+        for start, end in merged_confirmed:
             for day, seg_start, seg_end in split_by_academic_day(
                 start, end, timezone_name
             ):
@@ -211,12 +258,86 @@ def replay(
             adjustments=sorted(adjustments, key=lambda a: a.event_id),
         )
 
-    return ReplayState(
+        if builder is not None:
+            records_by_id = {r.event_id: r for r in records}
+            effective_statuses = {
+                eid: record.status.value for eid, record in records_by_id.items()
+            }
+            builder.close_student(
+                student_id=student_id,
+                effective_statuses=effective_statuses,
+                confirmed_checkin_ids=sorted(r.event_id for r in confirmed_records),
+                pending_checkin_ids=sorted(r.event_id for r in pending_records),
+                confirmed_intervals=[
+                    (_utc_stamp(start), _utc_stamp(end))
+                    for start, end in merged_confirmed
+                ],
+                confirmed_seconds=confirmed_seconds,
+                pending_intervals=[
+                    (_utc_stamp(start), _utc_stamp(end))
+                    for start, end in merge_intervals(pending_intervals)
+                ],
+                pending_seconds=pending_seconds,
+                adjustment_seconds=adjustment_seconds,
+                raw_total_seconds=raw_total_seconds,
+                clamped=clamped,
+                total_seconds=total_seconds,
+                lesson_units=total_seconds // (45 * 60),
+                pending_lesson_units=pending_seconds // (45 * 60),
+                meets_requirement=total_seconds >= required_seconds,
+                daily=[(d.academic_day, d.seconds) for d in daily],
+            )
+
+    state = ReplayState(
         plan_version=plan_version,
         timezone=timezone_name,
         required_seconds=required_seconds,
         students=students,
     )
+    return state, builder.build() if builder is not None else None
+
+
+def replay(
+    events: Iterable[Event],
+    *,
+    plan_version: str,
+    timezone_name: str,
+    required_seconds: int,
+    up_to_event_id: str | None = None,
+) -> ReplayState:
+    """执行确定性的业务处理。"""
+    state, _ = _replay_events(
+        events,
+        plan_version=plan_version,
+        timezone_name=timezone_name,
+        required_seconds=required_seconds,
+        up_to_event_id=up_to_event_id,
+        build_graph=False,
+    )
+    return state
+
+
+def replay_explained(
+    events: Iterable[Event],
+    *,
+    plan_version: str,
+    timezone_name: str,
+    required_seconds: int,
+    up_to_event_id: str | None = None,
+    rule_version: str = RULE_VERSION,
+) -> tuple[ReplayState, ExplanationGraph]:
+    """执行确定性的业务处理，返回状态与因果解释图。"""
+    state, graph = _replay_events(
+        events,
+        plan_version=plan_version,
+        timezone_name=timezone_name,
+        required_seconds=required_seconds,
+        up_to_event_id=up_to_event_id,
+        rule_version=rule_version,
+        build_graph=True,
+    )
+    assert graph is not None
+    return state, graph
 
 
 def explain_checkin(record: CheckinRecord, tz_name: str) -> dict[str, Any]:
