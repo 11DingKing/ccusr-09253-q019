@@ -30,6 +30,11 @@ class CheckinStatus(StrEnum):
 
 INTERNSHIP_TYPE = "internship"
 
+# 内核规则集版本：确认签到并集合并、实习签到待导师确认、请假修正累加、
+# 总量负值钳零、45 分钟课时换算。规则语义变更时必须提升该版本，
+# 解释图节点以此标注来源版本，保证申诉复核能定位计算所依据的规则。
+RULE_VERSION = "hours-rules/v1"
+
 
 @dataclass(frozen=True)
 class Event:
@@ -99,7 +104,7 @@ class ReplayState:
     students: dict[str, StudentProgress]
 
 
-def _parse_checkin(
+def parse_checkin(
     event: Event, tz_name: str
 ) -> CheckinRecord:
     start = to_utc(datetime.fromisoformat(event.payload["check_in_at"]))
@@ -142,7 +147,7 @@ def replay(
 
     for event in sorted_events:
         if event.event_type == EventType.CHECKIN:
-            record = _parse_checkin(event, timezone_name)
+            record = parse_checkin(event, timezone_name)
             checkins_by_student.setdefault(event.student_id, []).append(record)
             checkin_index[event.event_id] = record
         elif event.event_type == EventType.MENTOR_CONFIRM:

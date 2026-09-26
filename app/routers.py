@@ -12,8 +12,13 @@ from .db import get_db
 from .schemas import (
     DiffOut,
     EventBatchIn,
+    ExplanationGraphOut,
+    ExplanationVerifyOut,
+    ExportIn,
+    ExportOut,
     FreezeIn,
     ImportResult,
+    NodeTraceOut,
     PlanIn,
     PlanOut,
     SnapshotOut,
@@ -160,3 +165,129 @@ def get_diff(
         )
     except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/plans/{plan_version}/students/{student_id}/explanation",
+    response_model=ExplanationGraphOut,
+)
+def get_live_explanation(
+    plan_version: str,
+    student_id: str,
+    viewer_role: str = "staff",
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.student_explanation(
+            db, plan_version, student_id, viewer_role
+        )
+    except services.PlanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.UnknownViewerRoleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result
+
+
+@router.get(
+    "/plans/{plan_version}/freezes/{freeze_id}/explanation/{student_id}",
+    response_model=ExplanationGraphOut,
+)
+def get_frozen_explanation(
+    plan_version: str,
+    freeze_id: str,
+    student_id: str,
+    viewer_role: str = "staff",
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.frozen_student_explanation(
+            db, plan_version, freeze_id, student_id, viewer_role
+        )
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.UnknownViewerRoleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result
+
+
+@router.get(
+    "/plans/{plan_version}/freezes/{freeze_id}/explanation/{student_id}/nodes/{node_id}/trace",
+    response_model=NodeTraceOut,
+)
+def get_explanation_node_trace(
+    plan_version: str,
+    freeze_id: str,
+    student_id: str,
+    node_id: str,
+    viewer_role: str = "staff",
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.trace_frozen_explanation_node(
+            db, plan_version, freeze_id, student_id, node_id, viewer_role
+        )
+    except services.NodeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except services.UnknownViewerRoleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result
+
+
+@router.get(
+    "/plans/{plan_version}/freezes/{freeze_id}/explanation/{student_id}/verify",
+    response_model=ExplanationVerifyOut,
+)
+def get_explanation_verification(
+    plan_version: str,
+    freeze_id: str,
+    student_id: str,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.verify_frozen_explanation(
+            db, plan_version, freeze_id, student_id
+        )
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result
+
+
+@router.post(
+    "/plans/{plan_version}/freezes/{freeze_id}/explanation/{student_id}/export",
+    response_model=ExportOut,
+)
+def post_explanation_export(
+    plan_version: str,
+    freeze_id: str,
+    student_id: str,
+    body: ExportIn,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result = services.export_frozen_explanation(
+            db,
+            plan_version,
+            freeze_id,
+            student_id,
+            viewer_role=body.viewer_role,
+            purpose=body.purpose,
+        )
+    except services.InvalidExportRequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except services.UnknownViewerRoleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="student not found")
+    return result

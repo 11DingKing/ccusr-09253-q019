@@ -138,3 +138,86 @@ class DiffOut(BaseModel):
     new_event_cutoff_id: str | None
     student_changes: list[dict[str, Any]]
     students_affected: int
+
+
+class ExplanationNodeOut(BaseModel):
+    node_id: str
+    kind: str
+    source_version: dict[str, str]
+    inputs: list[str]
+    input_fingerprint: str
+    attributes: dict[str, Any]
+
+
+class ExplanationEdgeOut(BaseModel):
+    source: str
+    target: str
+    kind: str
+
+
+class ExplanationGraphOut(BaseModel):
+    graph_version: str
+    plan_version: str
+    student_id: str
+    rule_version: str
+    timezone: str
+    required_seconds: int
+    event_cutoff_id: str | None
+    freeze_id: str | None
+    viewer_role: str
+    digest: str
+    redacted_fields: list[str]
+    nodes: list[ExplanationNodeOut]
+    edges: list[ExplanationEdgeOut]
+
+
+class NodeTraceOut(BaseModel):
+    plan_version: str
+    freeze_id: str | None
+    student_id: str
+    viewer_role: str
+    node: ExplanationNodeOut
+    ancestors: list[ExplanationNodeOut]
+    descendants: list[ExplanationNodeOut]
+
+
+class VerifyCheckOut(BaseModel):
+    name: str
+    ok: bool
+    detail: str
+
+
+class ExplanationVerifyOut(BaseModel):
+    plan_version: str
+    freeze_id: str
+    student_id: str
+    ok: bool
+    graph_digest: str
+    node_count: int
+    edge_count: int
+    checks: list[VerifyCheckOut]
+
+
+class ExportIn(BaseModel):
+    viewer_role: str = "staff"
+    purpose: str = Field(..., min_length=1, max_length=256)
+
+
+class ExportManifestOut(BaseModel):
+    package_type: str
+    package_version: str
+    plan_version: str
+    freeze_id: str | None
+    student_id: str
+    viewer_role: str
+    purpose: str
+    graph_digest: str
+    content_digest: str
+    node_count: int
+    edge_count: int
+    redacted_fields: list[str]
+
+
+class ExportOut(BaseModel):
+    manifest: ExportManifestOut
+    graph: ExplanationGraphOut
